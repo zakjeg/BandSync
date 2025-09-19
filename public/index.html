@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Synced PDF Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#fafafa; --card:#fff; --border:#e5e7eb; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      height: 100vh; display: flex; flex-direction: column;
+    }
+    header {
+      border-bottom:1px solid var(--border);
+      background:var(--card); padding:.75rem 1rem;
+      display:flex; align-items:center; gap:.75rem;
+      position:sticky; top:0; z-index:10;
+    }
+    header .title { font-weight:600; margin-right:auto; }
+    .hint { font-size:.9rem; color:#666; }
+    #viewer {
+      overflow:auto; flex:1 1 auto;
+      padding:1rem; display:flex; flex-direction:column; gap:1rem;
+    }
+    .page {
+      background:var(--card); border:1px solid var(--border);
+      border-radius:.75rem; box-shadow:0 2px 10px rgba(0,0,0,.05);
+      display:flex; justify-content:center; padding:1rem;
+    }
+    canvas { width:100%; height:auto; max-width:900px; }
+    .btn { padding:.35rem .75rem; border:1px solid var(--border); background:#fff; border-radius:.5rem; cursor:pointer; }
+    .btn:active { transform: translateY(1px); }
+    .pill { font-variant-numeric: tabular-nums; padding:.15rem .5rem; border:1px solid var(--border); border-radius:999px; background:#fff; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">Synced PDF Viewer</div>
+    <div class="hint">Open on multiple devices — page stays in sync.</div>
+    <div id="pageBadge" class="pill">– / –</div>
+    <button id="prev" class="btn" title="Previous page">←</button>
+    <button id="next" class="btn" title="Next page">→</button>
+  </header>
+
+  <div id="viewer" aria-label="PDF pages list"></div>
+
+  <!-- Socket.IO -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- PDF.js (ESM) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs" type="module"></script>
+
+  <script type="module">
+    import * as pdfjs from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs";
+    pdfjs.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.worker.min.mjs";
+
+    const socket = io();
+    const viewer = document.getElementById("viewer");
+    const pageBadge = document.getElementById("pageBadge");
+    const btnPrev = document.getElementById("prev");
+    const btnNext = document.getElementById("next");
+
+    const PDF_URL = "/repertuar1.pdf";
+
+    let pdfDoc = null;
+    let totalPages = 0;
+    let pageEls = [];         
+    let currentPage = 1;
+    let isScrollingFromSync = false; 
+    let pendingInitPage = null;      
+
+    const updateBadge = () => pageBadge.textContent = `${currentPage} / ${totalPages || "–"}`;
+
+    async function renderPage(num) {
+      const page = await pdfDoc.getPage(num);
+      const viewport = page.getViewport({ scale: 1.5 });
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "page";
+      wrapper.dataset.pageNumber = String(num);
+
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      wrapper.appendChild(canvas);
+      viewer.appendChild(wrapper);
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      pageEls.push({ num, el: wrapper, canvas });
+    }
+
+    async function loadPdf() {
+      const task = pdfjs.getDocument(PDF_URL);
+      pdfDoc = await task.promise;
+      totalPages = pdfDoc.numPages;
+      updateBadge();
+
+      for (let i = 1; i <= totalPages; i++) {
+        await renderPage(i);
+      }
+
+      if (pendingInitPage != null) {
+        scrollToPage(pendingInitPage, false);
+        pendingInitPage = null;
+      } else {
+        scrollToPage(1, false);
+      }
+    }
+
+    function getPrimaryVisiblePage() {
+      const containerRect = viewer.getBoundingClientRect();
+      let best = { num: 1, overlap: -Infinity };
+      for (const { num, el } of pageEls) {
+        const r = el.getBoundingClientRect();
+        const top = Math.max(r.top, containerRect.top);
+        const bottom = Math.min(r.bottom, containerRect.bottom);
+        const visible = Math.max(0, bottom - top);
+        if (visible > best.overlap) best = { num, overlap: visible };
+      }
+      return best.num;
+    }
+
+    function throttle(fn, ms) {
+      let last = 0, timer = null;
+      return (...args) => {
+        const now = Date.now();
+        if (now - last >= ms) {
+          last = now; fn(...args);
+        } else if (!timer) {
+          const wait = ms - (now - last);
+          timer = setTimeout(() => { last = Date.now(); timer = null; fn(...args); }, wait);
+        }
+      };
+    }
+
+    function scrollToPage(num, smooth = true) {
+      const entry = pageEls.find(p => p.num === num);
+      if (!entry) {
+        pendingInitPage = num;
+        return;
+      }
+      isScrollingFromSync = true;
+      entry.el.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+      setTimeout(() => { isScrollingFromSync = false; }, 400);
+      currentPage = num;
+      updateBadge();
+    }
+
+    viewer.addEventListener("scroll", throttle(() => {
+      if (isScrollingFromSync) return;
+      const visible = getPrimaryVisiblePage();
+      if (visible !== currentPage) {
+        currentPage = visible;
+        updateBadge();
+        socket.emit("pdf:page", visible);
+      }
+    }, 150));
+
+    btnPrev.addEventListener("click", () => {
+      const nextNum = Math.max(1, currentPage - 1);
+      scrollToPage(nextNum);
+      socket.emit("pdf:page", nextNum);
+    });
+    btnNext.addEventListener("click", () => {
+      const nextNum = Math.min(totalPages, currentPage + 1);
+      scrollToPage(nextNum);
+      socket.emit("pdf:page", nextNum);
+    });
+
+    socket.on("pdf:page", (pageNum) => {
+      if (pageNum !== currentPage) scrollToPage(pageNum);
+    });
+
+    socket.on("pdf:init", ({ page }) => {
+      if (page) scrollToPage(page, false);
+    });
+
+    socket.on("connect", () => console.log("socket connected", socket.id));
+    socket.on("disconnect", () => console.log("socket disconnected"));
+
+    loadPdf().catch(err => {
+      console.error("Failed to load PDF:", err);
+      alert("Failed to load PDF. Put a file at /public/sample.pdf or change PDF_URL.");
+    });
+  </script>
+</body>
+</html>
