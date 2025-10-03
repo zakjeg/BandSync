@@ -14,7 +14,7 @@ const btnSolo = document.getElementById("solo")
 let lastEmittedPage = null;      // last page we sent to server
 let pendingEmitPage = null;      // page waiting to be emitted after debounce
 let emitTimer = null;            // debounce timer id
-const EMIT_DEBOUNCE_MS = 160;    // wait for this many ms of stability before emitting
+const EMIT_DEBOUNCE_MS = 140;    // wait for this many ms of stability before emitting
 
 
 
