@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
@@ -12,5 +13,13 @@
   "dependencies": {
     "express": "^5.1.0",
     "socket.io": "^4.8.1"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zakjeg/BandSync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zakjeg/BandSync/issues"
+  },
+  "homepage": "https://github.com/zakjeg/BandSync#readme"
 }
